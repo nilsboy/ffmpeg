@@ -240,6 +240,7 @@ parts:
       - opencl-headers
       - pkg-config
       - yasm
+      - libfdk-aac-dev
       - on amd64:
         - libcrystalhd-dev
         # TODO: re-enable `nvidia-cuda*` if we can determine that we can ship non-free
@@ -315,6 +316,7 @@ parts:
       - libzvbi0
       - mesa-vdpau-drivers
       - ocl-icd-libopencl1
+      - libfdk-aac1
       - on amd64:
         - mesa-va-drivers
         - libcrystalhd3
@@ -345,7 +347,6 @@ parts:
       --prefix=/usr \
       --disable-debug \
       --disable-doc \
-      --disable-libfdk-aac \
       --disable-static \
       --enable-libaom \
       --enable-avisynth \
@@ -409,6 +410,8 @@ parts:
       --enable-vaapi \
       --enable-version3 \
       --enable-vulkan \
+      --enable-nonfree \
+      --enable-libfdk-aac \
       --enable-xlib ${EXTRA}
       
       # TODO: re-enable `--enable-nonfree \` if we can determine the legality/licensing issues are ok.
