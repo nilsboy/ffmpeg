@@ -1,25 +1,111 @@
-name: 🧪 Test snap can be built on x86_64
+name: 🧪 Build & release ffmpeg snap (amd64)
 
 on:
   push:
     branches: [ master ]
   pull_request:
     branches: [ master ]
-    
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# Serialise runs so that two quick pushes can't race each other
+# when updating the rolling `latest` release.
+concurrency:
+  group: ffmpeg-snap-build-release
+  cancel-in-progress: false
+
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v7
 
       - uses: snapcore/action-build@v1
         id: build
 
-      - uses: diddlesnaps/snapcraft-review-action@v1
+      - uses: diddlesnaps/snapcraft-review-action@v1.3.1
         with:
           snap: ${{ steps.build.outputs.snap }}
           isClassic: 'false'
           # Plugs and Slots declarations to override default denial (requires store assertion to publish)
           # plugs: ./plug-declaration.json
           # slots: ./slot-declaration.json
+
+      # ffmpeg_n9.1_amd64.snap -> n9.1
+      - name: Derive snap version
+        id: version
+        run: |
+          SNAP_FILE="${{ steps.build.outputs.snap }}"
+          BASE_FILE="$(basename "${SNAP_FILE}" .snap)"
+          VERSION="${BASE_FILE#ffmpeg_}"
+          VERSION="${VERSION%_*}"
+          echo "snap_file=${SNAP_FILE}"      >> "$GITHUB_OUTPUT"
+          echo "base_file=${BASE_FILE}"      >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}"          >> "$GITHUB_OUTPUT"
+
+      # One immutable release per push; existing releases are never deleted,
+      # only assets of a re-run release get replaced.
+      - name: Create pinned release
+        if: github.ref == 'refs/heads/master' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SNAP_FILE: ${{ steps.build.outputs.snap }}
+          BASE_FILE: ${{ steps.version.outputs.base_file }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          TAG="${VERSION}-r${GITHUB_RUN_NUMBER}"
+          echo "RELEASE_TAG=${TAG}" >> "$GITHUB_ENV"
+
+          cat > release-notes.md <<EOF
+          FFmpeg snap **${VERSION}**, built from the FFmpeg release/9.1 branch at commit ${GITHUB_SHA:0:12}.
+
+          - Asset: ${BASE_FILE}.snap (amd64, stable-channel build)
+          - Rolling build with a permanent link: [latest release](https://github.com/${GITHUB_REPOSITORY}/releases/download/latest/ffmpeg_amd64.snap)
+          EOF
+
+          if gh release view "${TAG}" > /dev/null 2>&1; then
+            gh release upload "${TAG}" "${SNAP_FILE}" --clobber
+          else
+            gh release create "${TAG}" "${SNAP_FILE}" \
+              --target "${GITHUB_SHA}" \
+              --title "FFmpeg snap ${VERSION} (${TAG})" \
+              --notes-file release-notes.md
+          fi
+
+      # Rolling release whose assets are replaced on every push; the
+      # version-less asset name keeps the download link permanent.
+      - name: Update rolling latest release
+        if: github.ref == 'refs/heads/master' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SNAP_FILE: ${{ steps.build.outputs.snap }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          cp "${SNAP_FILE}" ffmpeg_amd64.snap
+
+          if gh release view latest > /dev/null 2>&1; then
+            gh release delete latest --cleanup-tag --yes
+          fi
+          # Cover the edge case of a leftover tag with no release attached.
+          if git rev-parse --verify -q refs/tags/latest > /dev/null; then
+            git tag -f latest "${GITHUB_SHA}"
+            git push -f origin refs/tags/latest
+          fi
+
+          cat > release-notes.md <<EOF
+          > ⚡ **Rolling release** - these assets are replaced on every push to master, and the link below is permanent.
+
+          Current build: **${VERSION}** - pinned release: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${RELEASE_TAG}
+
+          Download: https://github.com/${GITHUB_REPOSITORY}/releases/download/latest/ffmpeg_amd64.snap
+
+          Install: sudo snap install --dangerous ffmpeg_amd64.snap
+          EOF
+
+          gh release create latest ffmpeg_amd64.snap \
+            --target "${GITHUB_SHA}" \
+            --title "ffmpeg snap - latest build (${VERSION})" \
+            --notes-file release-notes.md
