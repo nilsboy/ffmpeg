@@ -130,6 +130,7 @@ parts:
       - -Denable_tests=false
     build-packages:
       - libxxhash-dev
+      - meson
       - nasm
     stage-packages:
       - libxxhash0
